@@ -14,6 +14,7 @@ func (a *App) trayLoop() {
 			systray.SetTooltip("win-taskbar-pet")
 			mPause := systray.AddMenuItem("Pause", "Pause the pet")
 			mAuto := systray.AddMenuItemCheckbox("Start with Windows", "Run at Windows startup", autostartEnabled())
+			mRoam := systray.AddMenuItemCheckbox("Semua monitor", "Monyet jalan lintas monitor", a.cfg.RoamAll)
 			systray.AddSeparator()
 			mExit := systray.AddMenuItem("Exit", "Quit win-taskbar-pet")
 			go func() {
@@ -34,6 +35,20 @@ func (a *App) trayLoop() {
 						systray.Quit()
 						runtime.Quit(a.ctx)
 						return
+					case <-mRoam.ClickedCh:
+						a.mu.Lock()
+						a.cfg.RoamAll = !a.cfg.RoamAll
+						roam := a.cfg.RoamAll
+						a.mu.Unlock()
+						if err := saveConfig(a.cfg); err != nil {
+							println("[pet] config save:", err.Error())
+						}
+						if roam {
+							mRoam.Check()
+						} else {
+							mRoam.Uncheck()
+						}
+						a.reslot()
 					case <-mAuto.ClickedCh:
 						// Toggle the registry (source of truth), then force
 						// the checkbox to match it — correct whether or not

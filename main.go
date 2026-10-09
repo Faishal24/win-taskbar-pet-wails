@@ -13,7 +13,7 @@ import (
 var assets embed.FS
 
 func main() {
-	app := &App{}
+	app := &App{cfg: loadConfig()}
 	// Initial size is a placeholder — gapLoop positions the window from the
 	// live probe within seconds (physical pixels via SetWindowPos).
 	err := wails.Run(&options.App{

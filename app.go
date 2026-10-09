@@ -34,6 +34,9 @@ type App struct {
 	lastSlot slotRect
 	pending  slotRect
 	hasPend  bool
+	cfg      config
+	lastGap  gapInfo
+	hasGap   bool
 }
 
 type slotRect struct{ x, y, w, h int32 }
@@ -126,11 +129,16 @@ func (a *App) applySlot(s slotRect) {
 }
 
 func (a *App) gapLoop() {
-	sw, _ := screenSize()
-	a.Log(fmt.Sprintf("screenW=%d", sw))
+	vx, _, vw, _ := virtualScreen()
+	pw, _ := screenSize()
+	a.Log(fmt.Sprintf("virtual=%d..%d primaryW=%d roamAll=%v", vx, vx+vw, pw, a.cfg.RoamAll))
 	first := true
 	for g := range a.gapCh {
-		slot := slotRect{x: 0, y: int32(g.Gap.Y) - slotH, w: sw, h: slotH}
+		a.mu.Lock()
+		a.lastGap, a.hasGap = g, true
+		roam := a.cfg.RoamAll
+		a.mu.Unlock()
+		slot := a.slotFor(g, vx, vw, pw, roam)
 		if first {
 			// Position immediately on the first report — the layout may
 			// flap forever (630<->602), which would otherwise deadlock
@@ -168,7 +176,31 @@ func (a *App) gapLoop() {
 	}
 }
 
-// --- input: hover detect + click-anywhere unselect ---
+// slotFor maps a probe gap to our strip: full virtual width when roaming
+// all monitors, primary width only otherwise. y follows the primary
+// taskbar; on monitors with a different taskbar top it floats slightly.
+func (a *App) slotFor(g gapInfo, vx, vw, pw int32, roam bool) slotRect {
+	w := vw
+	if !roam {
+		w = pw
+	}
+	return slotRect{x: vx, y: int32(g.Gap.Y) - slotH, w: w, h: slotH}
+}
+
+// reslot re-applies the current setting immediately (tray toggle path).
+func (a *App) reslot() {
+	a.mu.Lock()
+	g, ok := a.lastGap, a.hasGap
+	roam := a.cfg.RoamAll
+	a.mu.Unlock()
+	if !ok {
+		return
+	}
+	vx, _, vw, _ := virtualScreen()
+	pw, _ := screenSize()
+	a.applySlot(a.slotFor(g, vx, vw, pw, roam))
+	a.Log(fmt.Sprintf("reslot roamAll=%v", roam))
+}
 
 func (a *App) inputLoop() {
 	ticker := time.NewTicker(16 * time.Millisecond)

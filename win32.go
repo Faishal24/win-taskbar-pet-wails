@@ -57,6 +57,10 @@ const (
 
 	smCxScreen = 0
 	smCyScreen = 1
+	smXVirtualScreen = 76
+	smYVirtualScreen = 77
+	smCxVirtualScreen = 78
+	smCyVirtualScreen = 79
 )
 
 type winPoint struct{ X, Y int32 }
@@ -242,6 +246,15 @@ func screenSize() (int32, int32) {
 	w, _, _ := procGetSystemMetrics.Call(smCxScreen)
 	h, _, _ := procGetSystemMetrics.Call(smCyScreen)
 	return int32(w), int32(h)
+}
+
+// virtualScreen spans all monitors (for the roam-everywhere strip).
+func virtualScreen() (x, y, w, h int32) {
+	vx, _, _ := procGetSystemMetrics.Call(smXVirtualScreen)
+	vy, _, _ := procGetSystemMetrics.Call(smYVirtualScreen)
+	vw, _, _ := procGetSystemMetrics.Call(smCxVirtualScreen)
+	vh, _, _ := procGetSystemMetrics.Call(smCyVirtualScreen)
+	return int32(vx), int32(vy), int32(vw), int32(vh)
 }
 
 // QueryUserNotificationState values that cover the screen.
