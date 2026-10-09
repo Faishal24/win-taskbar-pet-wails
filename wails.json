@@ -1,0 +1,22 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "win-taskbar-pet",
+  "outputfilename": "win-taskbar-pet.exe",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "http://127.0.0.1:1420",
+  "frontend:dist": "./frontend/dist",
+  "author": {
+    "name": "Faishal24",
+    "email": "ishal.2401@gmail.com"
+  },
+  "info": {
+    "companyName": "Faishal24",
+    "productName": "win-taskbar-pet",
+    "productVersion": "0.0.1",
+    "version": "0.0.1",
+    "description": "Pixel monkey roaming above the Windows taskbar",
+    "copyright": ""
+  }
+}

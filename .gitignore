@@ -1,0 +1,7 @@
+node_modules/
+frontend/dist/
+frontend/wailsjs/
+build/bin/
+*.exe
+*.png
+*.log
