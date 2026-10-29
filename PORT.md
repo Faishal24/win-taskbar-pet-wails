@@ -50,9 +50,13 @@ with it killed (transparent over desktop).
 
 - `window.go.main.App.UpdateRect(x,y,w,h,selected)` @10Hz (window-client phys px)
 - `window.go.main.App.Log(msg)`
-- backend → frontend events: `pet-hover(bool)`, `pet-unselect`, `pet-paused(bool)`
-- poke/select/hover-cursor stay local in TS (real pointer events arrive —
-  overlay is a normal top-level window).
+- backend → frontend events: `pet-hover(bool)`, `pet-unselect`, `pet-paused(bool)`,
+  `pet-poke(dir)`, `pet-layout(w,h)`
+- clicks are detected in Go (`GetAsyncKeyState`, 16ms poll), not in TS: a
+  layered window spanning monitors with different DPIs receives no mouse input
+  on the secondary monitor (hover worked, pointerdown never fired). The window
+  stays `WS_EX_TRANSPARENT` permanently, so the taskbar under the strip is
+  always clickable and clicks are read globally instead.
 
 ## Behavior parity with Electron build
 
@@ -72,7 +76,10 @@ supervisor (single exe — revisit crash recovery separately).
 
 ## Known gaps
 
-- Secondary monitor with a taskbar at a different height/position: the strip
-  follows the primary taskbar's top edge.
+- Strip is a single window spanning the virtual desktop; it is repositioned to
+  each monitor's own taskbar rail (per-monitor `EnumDisplayMonitors` +
+  `Shell_TrayWnd`/`Shell_SecondaryTrayWnd`), so different taskbar heights work.
+- Poke timing depends on the 16ms button poll: sub-16ms synthetic clicks can be
+  missed (human clicks are unaffected).
 - No crash recovery/watchdog.
 - No settings window, no sprite-pack switcher, no installer.

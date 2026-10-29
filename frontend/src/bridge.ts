@@ -23,6 +23,8 @@ export interface PetApi {
   onUnselect(cb: () => void): void;
   onPaused(cb: (paused: boolean) => void): void;
   onHover(cb: (hovered: boolean) => void): void;
+  onPoke(cb: (dir: 1 | -1) => void): void;
+  onLayout(cb: (width: number, height: number) => void): void;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -75,5 +77,11 @@ export const api: PetApi = {
   },
   onHover(cb: (hovered: boolean) => void): void {
     onEvent('pet-hover', (v: boolean) => cb(!!v));
+  },
+  onPoke(cb: (dir: 1 | -1) => void): void {
+    onEvent('pet-poke', (v: number) => cb(Number(v) >= 0 ? 1 : -1));
+  },
+  onLayout(cb: (width: number, height: number) => void): void {
+    onEvent('pet-layout', (w: number, h: number) => cb(Number(w) || 0, Number(h) || 0));
   },
 };

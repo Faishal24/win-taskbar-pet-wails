@@ -122,7 +122,11 @@ const POSES = Object.keys(ACTIVITIES) as Pose[];
 /** Chance to flip travel direction per art pixel walked (vscode: 1%). */
 const TURN_CHANCE = 0.01;
 
-let x = 10;
+let x = 0;
+/** The window is still 1536px wide at module load; spawn once it settles. */
+let spawned = false;
+let spawnWidth = 0;
+const spawnFallbackAt = performance.now() + 4000;
 let dir: 1 | -1 = 1;
 let hovered = false;
 let selected = false;
@@ -136,6 +140,10 @@ let pose: Pose = 'walk';
 let poseStart = performance.now();
 let frame = 0;
 let paused = false;
+
+api.onLayout((width) => {
+  spawnWidth = width;
+});
 
 api.onPaused((value) => {
   paused = value;
@@ -221,19 +229,6 @@ function monkeyRect(now: number): { px: number; py: number; w: number; h: number
   return { px: x, py: groundY() - h, w, h, hop };
 }
 
-function hitTest(mxCss: number, myCss: number, now: number): boolean {
-  const mx = mxCss * dpr;
-  const my = myCss * dpr;
-  const m = monkeyRect(now);
-  const top = m.py - m.hop;
-  const pad = 5;
-  return (
-    mx >= m.px - pad &&
-    mx <= m.px + m.w + pad &&
-    my >= top - pad &&
-    my <= m.py + m.h + pad
-  );
-}
 
 function drawFrame(f: GridFrame, xPx: number, feet: number, lift: number): void {
   // All coordinates are integers by construction (see draw()), so every
@@ -288,18 +283,17 @@ function draw(now: number): void {
   drawFrame(frames[frame], px, feet, 0);
 }
 
-canvas.addEventListener('pointerdown', (event) => {
+// Pokes arrive from the backend: it polls the global mouse button and knows
+// the monkey rect, so clicks work on every monitor (WebView2 gets no mouse
+// input on a layered window that spans monitors with different DPIs).
+api.onPoke((pokeDir) => {
   const now = performance.now();
-  if (hitTest(event.clientX, event.clientY, now)) {
-    // Poke: bounce-run away from the click point, then resume strolling.
-    const m = monkeyRect(now);
-    fleeDir = event.clientX * dpr < m.px + m.w / 2 ? 1 : -1;
-    dir = fleeDir;
-    fleeStart = now;
-    fleeUntil = now + FLEE_MS;
-    selected = !selected;
-    api.report(`poke! flee ${dir > 0 ? 'right' : 'left'}${selected ? ' (selected)' : ''}`);
-  }
+  fleeDir = pokeDir;
+  dir = pokeDir;
+  fleeStart = now;
+  fleeUntil = now + FLEE_MS;
+  selected = !selected;
+  api.report(`poke! flee ${dir > 0 ? 'right' : 'left'}${selected ? ' (selected)' : ''}`);
 });
 
 let last = performance.now();
@@ -330,6 +324,13 @@ function loop(now: number): void {
   const dt = Math.max(0, Math.min(0.1, (now - last) / 1000));
   last = now;
 
+  // Spawn somewhere on the whole strip, but only once the backend has sized
+  // the window to the full virtual desktop (it is 1536px wide at load).
+  if (!spawned && (now > spawnFallbackAt || (spawnWidth > 0 && canvas.width >= spawnWidth))) {
+    spawned = true;
+    x = Math.random() * Math.max(1, canvas.width - ART_W * CELL);
+    api.report(`spawn x=${Math.round(x)} of ${canvas.width}`);
+  }
   if (!paused) {
     if (now < fleeUntil) {
       x += fleeDir * FLEE_SPEED * dt;

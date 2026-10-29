@@ -30,6 +30,9 @@ var (
 	procGetClassNameW               = modUser32.NewProc("GetClassNameW")
 	procSHQueryUserNotificationState = modShell32.NewProc("SHQueryUserNotificationState")
 	procSHAppBarMessage              = modShell32.NewProc("SHAppBarMessage")
+	procEnumDisplayMonitors          = modUser32.NewProc("EnumDisplayMonitors")
+	procGetMonitorInfoW              = modUser32.NewProc("GetMonitorInfoW")
+
 
 	modOle32             = windows.NewLazySystemDLL("ole32.dll")
 	procCoInitializeEx   = modOle32.NewProc("CoInitializeEx")
@@ -203,15 +206,6 @@ func applyBaseStyles(hwnd uintptr) {
 	procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoZOrder|swpFrameChange)
 }
 
-func setTransparent(hwnd uintptr, on bool) {
-	ex, _, _ := procGetWindowLongPtrW.Call(hwnd, u32neg(gwlExstyle), 0)
-	if on {
-		ex |= wsExTransparent
-	} else {
-		ex &^= wsExTransparent
-	}
-	procSetWindowLongPtrW.Call(hwnd, u32neg(gwlExstyle), ex)
-}
 
 func placeWindow(hwnd uintptr, x, y, w, h int32) {
 	procSetWindowPos.Call(hwnd, hwndTopmost,
@@ -309,4 +303,84 @@ func taskbarRect() (winRect, bool) {
 		return winRect{}, false
 	}
 	return windowRect(tb)
+}
+
+// --- per-monitor rails ---
+
+// monitorInfo is one display in physical pixels plus the top edge of its
+// taskbar (the "rail" the pet stands on). Monitors can differ in scale and
+// taskbar height, so a single rail for all of them makes the pet float.
+type monitorInfo struct {
+	X, Y, W, H int32
+	RailTop    int32
+}
+
+type monitorInfoEx struct {
+	cbSize    uint32
+	rcMonitor winRect
+	rcWork    winRect
+	dwFlags   uint32
+}
+
+// monitors enumerates displays and attaches each taskbar window to the
+// monitor that contains it. Taskbar rects are read live, so an auto-hidden
+// taskbar reports its slid-away top (near the monitor bottom).
+func monitors() []monitorInfo {
+	var out []monitorInfo
+	cb := windows.NewCallback(func(hMon, _, _, _ uintptr) uintptr {
+		var mi monitorInfoEx
+		mi.cbSize = uint32(unsafe.Sizeof(mi))
+		if r, _, _ := procGetMonitorInfoW.Call(hMon, uintptr(unsafe.Pointer(&mi))); r != 0 {
+			out = append(out, monitorInfo{
+				X:       mi.rcMonitor.Left,
+				Y:       mi.rcMonitor.Top,
+				W:       mi.rcMonitor.Right - mi.rcMonitor.Left,
+				H:       mi.rcMonitor.Bottom - mi.rcMonitor.Top,
+				RailTop: mi.rcMonitor.Bottom,
+			})
+		}
+		return 1
+	})
+	procEnumDisplayMonitors.Call(0, 0, cb, 0)
+
+	// One taskbar per monitor: Shell_TrayWnd (primary) plus one
+	// Shell_SecondaryTrayWnd per extra display.
+	enumWindows(func(h uintptr) bool {
+		cls := windowClass(h)
+		if cls != "Shell_TrayWnd" && cls != "Shell_SecondaryTrayWnd" {
+			return true
+		}
+		r, ok := windowRect(h)
+		if !ok {
+			return true
+		}
+		cx := (r.Left + r.Right) / 2
+		cy := (r.Top + r.Bottom) / 2
+		for i := range out {
+			m := &out[i]
+			if cx < m.X || cx >= m.X+m.W || cy < m.Y || cy >= m.Y+m.H {
+				continue
+			}
+			// Only trust a bottom-docked taskbar; anything at the very
+			// bottom edge (auto-hidden sliver) still counts as the rail.
+			if r.Top > m.Y+m.H/2 {
+				m.RailTop = r.Top
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// monitorAt returns the monitor containing x (falling back to the first).
+func monitorAt(list []monitorInfo, x int32) monitorInfo {
+	for _, m := range list {
+		if x >= m.X && x < m.X+m.W {
+			return m
+		}
+	}
+	if len(list) > 0 {
+		return list[0]
+	}
+	return monitorInfo{}
 }

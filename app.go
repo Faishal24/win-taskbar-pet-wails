@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"fmt"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ type App struct {
 	lastGap  gapInfo
 	hasGap   bool
 	docked   bool
+	mons     []monitorInfo
 }
 
 type slotRect struct{ x, y, w, h int32 }
@@ -56,6 +58,66 @@ func (a *App) UpdateRect(x, y, w, h int, selected bool) {
 	a.mu.Lock()
 	a.rect = monkeyState{int32(x), int32(y), int32(w), int32(h), selected}
 	a.mu.Unlock()
+	a.followMonitor()
+}
+
+// petCenterX is the pet's screen x (window x + pushed rect x).
+func (a *App) petCenterX() int32 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.slotX + a.rect.x + a.rect.w/2
+}
+
+// railTop is the taskbar top edge on the monitor holding screen x.
+func (a *App) railTop(x int32) int32 {
+	a.mu.Lock()
+	list := a.mons
+	a.mu.Unlock()
+	if len(list) == 0 {
+		_, h := screenSize()
+		return h - 60
+	}
+	return monitorAt(list, x).RailTop
+}
+
+// followMonitor slides the strip vertically when the pet crosses onto a
+// monitor with a different taskbar height or offset. The renderer always
+// draws at the canvas bottom, so moving the window is all it takes.
+func (a *App) followMonitor() {
+	a.mu.Lock()
+	shown := a.shown
+	docked := a.docked
+	s := a.lastSlot
+	x := a.slotX + a.rect.x + a.rect.w/2
+	a.mu.Unlock()
+	if !shown || s.w == 0 {
+		return
+	}
+	want := a.railTop(x) - slotH
+	if docked {
+		a.mu.Lock()
+		list := a.mons
+		a.mu.Unlock()
+		if len(list) > 0 {
+			m := monitorAt(list, x)
+			want = m.Y + m.H - slotH
+		}
+	}
+	a.mu.Lock()
+	cur := a.slotY
+	if want == cur {
+		a.mu.Unlock()
+		return
+	}
+	a.slotY = want
+	a.lastSlot.y = want
+	if a.hasPend {
+		a.pending.y = want
+	}
+	a.mu.Unlock()
+	placeWindow(a.hwnd, s.x, want, s.w, s.h)
+	r, _ := windowRect(a.hwnd)
+	a.Log(fmt.Sprintf("follow pet-x=%d -> y=%d (rect %d,%d %dx%d)", x, want, r.Left, r.Top, r.Right-r.Left, r.Bottom-r.Top))
 }
 
 // --- lifecycle (wired in main.go) ---
@@ -90,11 +152,29 @@ func (a *App) domready(ctx context.Context) {
 	// so clear it right after (see clearClassBackground).
 	runtime.WindowSetBackgroundColour(a.ctx, 0, 0, 0, 0)
 	clearClassBackground(a.hwnd)
+	a.mu.Lock()
+	a.mons = monitors()
+	list := a.mons
+	a.mu.Unlock()
+	for _, m := range list {
+		a.Log(fmt.Sprintf("monitor %d,%d %dx%d rail=%d", m.X, m.Y, m.W, m.H, m.RailTop))
+	}
 	go runGapProbe(a.gapCh, a.stopCh, a.Log)
 	go a.gapLoop()
 	go a.inputLoop()
 	go a.watchLoop()
 	go a.trayLoop()
+	if os.Getenv("PET_FREEZE") != "" {
+		go func() {
+			// Debug/testing aid: freeze the pet where it spawned.
+			time.Sleep(700 * time.Millisecond)
+			a.mu.Lock()
+			a.paused = true
+			a.mu.Unlock()
+			runtime.EventsEmit(a.ctx, "pet-paused", true)
+			a.Log("PET_FREEZE: pet paused")
+		}()
+	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -117,6 +197,7 @@ func (a *App) applySlot(s slotRect) {
 	a.lastSlot = s
 	a.mu.Unlock()
 	a.ensureShown()
+	runtime.EventsEmit(a.ctx, "pet-layout", s.w, s.h)
 }
 
 // ensureShown shows the overlay once and drops the stray taskbar button.
@@ -199,7 +280,7 @@ func (a *App) slotFor(g gapInfo, vx, vw, pw int32, roam bool) slotRect {
 	if !roam {
 		w = pw
 	}
-	return slotRect{x: vx, y: int32(g.Gap.Y) - slotH, w: w, h: slotH}
+	return slotRect{x: vx, y: a.railTop(a.petCenterX()) - slotH, w: w, h: slotH}
 }
 
 // reslot re-applies the current setting immediately (tray toggle path).
@@ -226,12 +307,21 @@ func (a *App) reslot() {
 // while an auto-hide taskbar is slid away (the pet stays visible).
 func (a *App) dockedSlot() slotRect {
 	vx, _, vw, _ := virtualScreen()
-	pw, sh := screenSize()
+	pw, _ := screenSize()
 	w := vw
 	if !a.cfg.RoamAll {
 		w = pw
 	}
-	return slotRect{x: vx, y: sh - slotH, w: w, h: slotH}
+	_, sh := screenSize()
+	y := sh
+	a.mu.Lock()
+	list := a.mons
+	a.mu.Unlock()
+	if len(list) > 0 {
+		m := monitorAt(list, a.petCenterX())
+		y = m.Y + m.H
+	}
+	return slotRect{x: vx, y: y - slotH, w: w, h: slotH}
 }
 
 // applyDockedSlot parks the window at the bottom edge. It intentionally does
@@ -274,7 +364,6 @@ func (a *App) inputLoop() {
 			a.mu.Lock()
 			a.hovered = inside
 			a.mu.Unlock()
-			setTransparent(a.hwnd, !inside)
 			runtime.EventsEmit(a.ctx, "pet-hover", inside)
 			a.Log(fmt.Sprintf("hover=%v cursor=%d,%d rect=%d,%d %dx%d slot=%d,%d",
 				inside, cx, cy, r.x, r.y, r.w, r.h, sx, sy))
@@ -284,11 +373,25 @@ func (a *App) inputLoop() {
 			wasDown = &b
 			continue
 		}
-		if down && !*wasDown && r.selected {
-			const up = int32(25)
-			rx, ry := sx+r.x, sy+r.y
-			if cx < rx-up || cx > rx+r.w+up || cy < ry-up || cy > ry+r.h+up {
-				runtime.EventsEmit(a.ctx, "pet-unselect")
+		if down && !*wasDown {
+			// Clicks are handled here, not in the webview: a layered window
+			// spanning monitors with different DPIs does not receive mouse
+			// input on the secondary monitor, so polling is the only reliable
+			// path. The window stays click-through (WS_EX_TRANSPARENT), which
+			// also keeps the taskbar under the strip fully usable.
+			if inside {
+				dir := 1
+				if cx >= sx+r.x+r.w/2 {
+					dir = -1
+				}
+				runtime.EventsEmit(a.ctx, "pet-poke", dir)
+				a.Log(fmt.Sprintf("poke at %d,%d dir=%d", cx, cy, dir))
+			} else if r.selected {
+				const up = int32(25)
+				rx, ry := sx+r.x, sy+r.y
+				if cx < rx-up || cx > rx+r.w+up || cy < ry-up || cy > ry+r.h+up {
+					runtime.EventsEmit(a.ctx, "pet-unselect")
+				}
 			}
 		}
 		*wasDown = down
@@ -359,6 +462,15 @@ func (a *App) watchLoop() {
 			moveTop(a.hwnd)
 		}
 		tick++
+		if tick%8 == 0 {
+			// Monitor layout is cheap to refresh and can change any time
+			// (plug/unplug, taskbar height, scale).
+			list := monitors()
+			a.mu.Lock()
+			a.mons = list
+			a.mu.Unlock()
+			a.followMonitor()
+		}
 		if tick%8 == 0 && shown {
 			// Explorer re-adds taskbar buttons on show/focus cycles.
 			deleteTaskbarTab(a.hwnd)
