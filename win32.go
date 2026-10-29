@@ -29,6 +29,7 @@ var (
 	procGetWindowThreadProcessId    = modUser32.NewProc("GetWindowThreadProcessId")
 	procGetClassNameW               = modUser32.NewProc("GetClassNameW")
 	procSHQueryUserNotificationState = modShell32.NewProc("SHQueryUserNotificationState")
+	procSHAppBarMessage              = modShell32.NewProc("SHAppBarMessage")
 
 	modOle32             = windows.NewLazySystemDLL("ole32.dll")
 	procCoInitializeEx   = modOle32.NewProc("CoInitializeEx")
@@ -272,4 +273,40 @@ func fullscreenActive() bool {
 		return false
 	}
 	return state == qunsRunningD3DFullScreen || state == qunsPresentationMode
+}
+
+// --- auto-hide taskbar ---
+
+type appBarData struct {
+	cbSize           uint32
+	hWnd             uintptr
+	uCallbackMessage uint32
+	uEdge            uint32
+	rc               winRect
+	lParam           uintptr
+}
+
+const (
+	abmGetState  = 4
+	absAutoHide  = 0x1
+	absAlwaysTop = 0x2
+)
+
+// taskbarAutoHide reports whether the user enabled "automatically hide the
+// taskbar" (a setting, not the current hidden state).
+func taskbarAutoHide() bool {
+	abd := appBarData{cbSize: uint32(unsafe.Sizeof(appBarData{}))}
+	state, _, _ := procSHAppBarMessage.Call(abmGetState, uintptr(unsafe.Pointer(&abd)))
+	return state&absAutoHide != 0
+}
+
+// taskbarRect returns the taskbar window rect. When the taskbar is
+// auto-hidden the rect slides to the screen edge (or off it), which is what
+// the docking overlap test keys on.
+func taskbarRect() (winRect, bool) {
+	tb := findWindow("Shell_TrayWnd")
+	if tb == 0 {
+		return winRect{}, false
+	}
+	return windowRect(tb)
 }

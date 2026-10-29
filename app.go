@@ -37,6 +37,7 @@ type App struct {
 	cfg      config
 	lastGap  gapInfo
 	hasGap   bool
+	docked   bool
 }
 
 type slotRect struct{ x, y, w, h int32 }
@@ -114,15 +115,23 @@ func (a *App) applySlot(s slotRect) {
 	a.mu.Lock()
 	a.slotX, a.slotY = s.x, s.y
 	a.lastSlot = s
+	a.mu.Unlock()
+	a.ensureShown()
+}
+
+// ensureShown shows the overlay once and drops the stray taskbar button.
+func (a *App) ensureShown() {
+	a.mu.Lock()
 	shown := a.shown
 	a.mu.Unlock()
-	if !shown {
-		runtime.WindowShow(a.ctx)
-		a.mu.Lock()
-		a.shown = true
-		a.mu.Unlock()
-		a.Log("overlay positioned and shown")
+	if shown {
+		return
 	}
+	runtime.WindowShow(a.ctx)
+	a.mu.Lock()
+	a.shown = true
+	a.mu.Unlock()
+	a.Log("overlay positioned and shown")
 	// Win11 shows a taskbar button for us despite WS_EX_TOOLWINDOW —
 	// delete it every time we (re)show.
 	deleteTaskbarTab(a.hwnd)
@@ -137,7 +146,13 @@ func (a *App) gapLoop() {
 		a.mu.Lock()
 		a.lastGap, a.hasGap = g, true
 		roam := a.cfg.RoamAll
+		docked := a.docked
 		a.mu.Unlock()
+		if docked {
+			// The probe still sees the (slid-away) taskbar while we are
+			// docked; watchLoop owns positioning until it comes back.
+			continue
+		}
 		slot := a.slotFor(g, vx, vw, pw, roam)
 		if first {
 			// Position immediately on the first report — the layout may
@@ -192,14 +207,43 @@ func (a *App) reslot() {
 	a.mu.Lock()
 	g, ok := a.lastGap, a.hasGap
 	roam := a.cfg.RoamAll
+	docked := a.docked
 	a.mu.Unlock()
 	if !ok {
+		return
+	}
+	if docked {
+		a.applyDockedSlot()
 		return
 	}
 	vx, _, vw, _ := virtualScreen()
 	pw, _ := screenSize()
 	a.applySlot(a.slotFor(g, vx, vw, pw, roam))
 	a.Log(fmt.Sprintf("reslot roamAll=%v", roam))
+}
+
+// dockedSlot is the strip parked flush against the screen bottom, used
+// while an auto-hide taskbar is slid away (the pet stays visible).
+func (a *App) dockedSlot() slotRect {
+	vx, _, vw, _ := virtualScreen()
+	pw, sh := screenSize()
+	w := vw
+	if !a.cfg.RoamAll {
+		w = pw
+	}
+	return slotRect{x: vx, y: sh - slotH, w: w, h: slotH}
+}
+
+// applyDockedSlot parks the window at the bottom edge. It intentionally does
+// NOT touch lastSlot: that stays the real above-taskbar slot so undocking
+// can climb straight back.
+func (a *App) applyDockedSlot() {
+	s := a.dockedSlot()
+	placeWindow(a.hwnd, s.x, s.y, s.w, s.h)
+	a.mu.Lock()
+	a.slotX, a.slotY = s.x, s.y
+	a.mu.Unlock()
+	a.ensureShown()
 }
 
 func (a *App) inputLoop() {
@@ -281,10 +325,35 @@ func (a *App) watchLoop() {
 				a.Log("watch: visible again -> show")
 			}
 		}
+		// Auto-hide taskbar: the pet must NOT vanish with it. When the
+		// taskbar slides away (its rect collapses to the screen edge), park
+		// the strip flush against the bottom; when it returns, climb back up.
+		docked := false
 		a.mu.Lock()
 		stillHidden := a.hidden
 		a.mu.Unlock()
-		if !stillHidden && shown {
+		if !stillHidden && taskbarAutoHide() {
+			if r, ok := taskbarRect(); ok {
+				_, sh := screenSize()
+				overlap := min(r.Bottom, sh) - max(r.Top, 0)
+				docked = overlap < 20
+			}
+		}
+		a.mu.Lock()
+		wasDocked := a.docked
+		a.docked = docked
+		stillHidden = a.hidden
+		shown = a.shown
+		last := a.lastSlot
+		a.mu.Unlock()
+		if !stillHidden {
+			if docked && (!wasDocked || !shown) {
+				a.applyDockedSlot()
+				a.Log("taskbar hidden — docking to bottom edge")
+			} else if !docked && wasDocked {
+				a.applySlot(last)
+				a.Log("taskbar back — climbing on top")
+			}
 			moveTop(a.hwnd)
 		}
 		tick++

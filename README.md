@@ -27,4 +27,5 @@ Pixel monkey roaming above the Windows taskbar. Go + WebView2 build of the
 
 Transparent topmost overlay tracking the taskbar gap full-width; hover,
 click → poke-flee + select, click-anywhere unselect, pause/resume + exit +
-autostart toggle in tray; fullscreen hide; Explorer-restart-proof (top-level).
+autostart toggle in tray; fullscreen hide; docks to the screen edge when the
+taskbar auto-hides; Explorer-restart-proof (top-level).

@@ -58,15 +58,14 @@ with it killed (transparent over desktop).
 
 Walk/idle/flee/hop/select/pause, rect push, 60fps cap, crisp physical-px
 rendering, gap debounce (2x), 250ms moveTop insurance, fullscreen hide,
+auto-hide taskbar docking (pet parks on the bottom edge instead of vanishing),
 roam-all-monitors or primary-only (persisted in `%APPDATA%\win-taskbar-pet\config.json`).
 
 Deliberately dropped: `PET_SHOT`/`PET_FREEZE` envs, in-taskbar SetParent era,
-supervisor (single exe — revisit crash recovery separately), auto-hide
-docking (was never live-tested; re-add after the basics work).
+supervisor (single exe — revisit crash recovery separately).
 
 ## Known gaps
 
-- Auto-hide taskbar: pet disappears with the taskbar (no docking yet).
 - Secondary monitor with a taskbar at a different height/position: the strip
   follows the primary taskbar's top edge.
 - No crash recovery/watchdog.
