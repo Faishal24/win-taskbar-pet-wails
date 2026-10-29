@@ -61,6 +61,12 @@ rendering, gap debounce (2x), 250ms moveTop insurance, fullscreen hide,
 auto-hide taskbar docking (pet parks on the bottom edge instead of vanishing),
 roam-all-monitors or primary-only (persisted in `%APPDATA%\win-taskbar-pet\config.json`).
 
+Random activities are a direct port of vscode-petbar's `ACTIVITIES` table
+(weights, min/max durations in 160ms ticks, per-pose frame rates) with the
+speeds kept as multipliers of our desktop walk speed. Poke still overrides
+with the hop-and-flee run. Personality weighting (`personality.ts`) is not
+ported yet.
+
 Deliberately dropped: `PET_SHOT`/`PET_FREEZE` envs, in-taskbar SetParent era,
 supervisor (single exe — revisit crash recovery separately).
 

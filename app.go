@@ -276,6 +276,8 @@ func (a *App) inputLoop() {
 			a.mu.Unlock()
 			setTransparent(a.hwnd, !inside)
 			runtime.EventsEmit(a.ctx, "pet-hover", inside)
+			a.Log(fmt.Sprintf("hover=%v cursor=%d,%d rect=%d,%d %dx%d slot=%d,%d",
+				inside, cx, cy, r.x, r.y, r.w, r.h, sx, sy))
 		}
 		if wasDown == nil {
 			b := down

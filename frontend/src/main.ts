@@ -52,7 +52,7 @@ function resize(): void {
 window.addEventListener('resize', resize);
 resize();
 
-/** Physical pixels per second (45 css px/s at 125% scale). */
+/** Physical pixels per second for a plain walk (45 css px/s at 125%). */
 const SPEED = 45 * dpr;
 /** Fleeing is ~3.5x walk speed — frantic but trackable. */
 const FLEE_SPEED = 160 * dpr;
@@ -60,23 +60,79 @@ const FLEE_MS = 1500;
 /** Single jump at poke start: height px over HOP_MS, then flat run. */
 const FLEE_HOP_PX = 12;
 const HOP_MS = 450;
-const WALK_FRAME_MS = 140;
-const RUN_FRAME_MS = 90;
-const STAND_FRAME_MS = 170;
-const IDLE_MS = 1400;
-const NEXT_IDLE_MIN_MS = 4000;
-const NEXT_IDLE_SPAN_MS = 4000;
+
+type Pose =
+  | 'amble'
+  | 'walk'
+  | 'run'
+  | 'hop'
+  | 'stand'
+  | 'sleep'
+  | 'eat'
+  | 'dance'
+  | 'wave'
+  | 'slip'
+  | 'moonwalk'
+  | 'backflip'
+  | 'shoot';
+
+interface Activity {
+  /** Walk-speed multiplier; 0 = stays put. */
+  speed: number;
+  minMs: number;
+  maxMs: number;
+  weight: number;
+}
+
+// Durations and weights lifted from vscode-petbar (ticks x 160ms), speeds
+// kept as multipliers of our walk so the pet keeps its desktop pace.
+const ACTIVITIES: Record<Pose, Activity> = {
+  amble: { speed: 0.5, minMs: 7200, maxMs: 24000, weight: 20 },
+  walk: { speed: 1, minMs: 6400, maxMs: 19200, weight: 20 },
+  run: { speed: 2, minMs: 4000, maxMs: 8800, weight: 14 },
+  hop: { speed: 1.5, minMs: 3200, maxMs: 7200, weight: 14 },
+  stand: { speed: 0, minMs: 4000, maxMs: 11200, weight: 16 },
+  sleep: { speed: 0, minMs: 9600, maxMs: 22400, weight: 14 },
+  eat: { speed: 0, minMs: 4000, maxMs: 8800, weight: 10 },
+  dance: { speed: 0, minMs: 2400, maxMs: 5600, weight: 6 },
+  wave: { speed: 0, minMs: 1600, maxMs: 3200, weight: 5 },
+  slip: { speed: 2, minMs: 1440, maxMs: 2880, weight: 5 },
+  moonwalk: { speed: 0.3, minMs: 5600, maxMs: 12800, weight: 6 },
+  backflip: { speed: 1, minMs: 1920, maxMs: 3840, weight: 4 },
+  shoot: { speed: 0, minMs: 1600, maxMs: 2880, weight: 6 },
+};
+
+const POSE_FRAME_MS: Record<Pose, number> = {
+  amble: 170,
+  walk: 140,
+  run: 90,
+  hop: 150,
+  stand: 170,
+  sleep: 900,
+  eat: 500,
+  dance: 260,
+  wave: 400,
+  slip: 220,
+  moonwalk: 200,
+  backflip: 110,
+  shoot: 260,
+};
+
+const POSES = Object.keys(ACTIVITIES) as Pose[];
+/** Chance to flip travel direction per art pixel walked (vscode: 1%). */
+const TURN_CHANCE = 0.01;
 
 let x = 10;
 let dir: 1 | -1 = 1;
 let hovered = false;
 let selected = false;
-let idleUntil = 0;
 let fleeUntil = 0;
 let fleeStart = -Infinity;
 let fleeDir: 1 | -1 = 1;
-let nextIdleAt = performance.now() + 3000;
-let pose = 'walk';
+let activity: Pose = 'walk';
+let activityUntil = 0;
+let lastActivity: Pose | null = null;
+let pose: Pose = 'walk';
 let poseStart = performance.now();
 let frame = 0;
 let paused = false;
@@ -97,18 +153,64 @@ function groundY(): number {
   return canvas.height - 3;
 }
 
-function currentPose(now: number): string {
+function currentPose(now: number): Pose {
   if (now < fleeUntil) {
     return 'run';
   }
-  if (now < idleUntil) {
-    return 'stand';
-  }
-  return 'walk';
+  return activity;
 }
 
-function facing(moveDir: 1 | -1): string {
-  return moveDir === 1 ? 'right' : 'left';
+/** Weighted random pick from the vscode activity table. */
+function pickActivity(now: number): void {
+  let total = 0;
+  for (const p of POSES) {
+    total += ACTIVITIES[p].weight;
+  }
+  let picked: Pose = 'walk';
+  // Reroll a couple of times so long activities don't repeat back to back.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let roll = Math.random() * total;
+    picked = 'walk';
+    for (const p of POSES) {
+      roll -= ACTIVITIES[p].weight;
+      if (roll <= 0) {
+        picked = p;
+        break;
+      }
+    }
+    if (picked !== lastActivity) {
+      break;
+    }
+  }
+  startActivity(picked, now);
+}
+
+function startActivity(next: Pose, now: number): void {
+  const a = ACTIVITIES[next];
+  activity = next;
+  lastActivity = next;
+  activityUntil = now + a.minMs + Math.random() * (a.maxMs - a.minMs);
+  pose = next;
+  poseStart = now;
+  frame = 0;
+  api.report(`activity=${next} for ${Math.round((activityUntil - now) / 100) / 10}s`);
+}
+
+function facingFor(travelDir: 1 | -1): string {
+  // Moonwalk slides backwards: face opposite the travel direction.
+  const right = pose === 'moonwalk' ? travelDir === -1 : travelDir === 1;
+  return right ? 'right' : 'left';
+}
+
+/** Random direction flips keyed on distance walked (1% per art pixel). */
+function maybeTurn(distancePx: number): void {
+  const cells = distancePx / CELL;
+  if (cells <= 0) {
+    return;
+  }
+  if (Math.random() < 1 - Math.pow(1 - TURN_CHANCE, cells)) {
+    dir = dir === 1 ? -1 : 1;
+  }
 }
 
 function monkeyRect(now: number): { px: number; py: number; w: number; h: number; hop: number } {
@@ -174,11 +276,11 @@ function draw(now: number): void {
   }
 
   const moveDir = now < fleeUntil ? fleeDir : dir;
-  const frames = PACK.poses[pose]?.[facing(moveDir)] ?? PACK.poses.walk[facing(moveDir)];
+  const frames = PACK.poses[pose]?.[facingFor(moveDir)] ?? PACK.poses.walk[facingFor(moveDir)];
   if (!frames || frames.length === 0) {
     return;
   }
-  const frameMs = pose === 'walk' ? WALK_FRAME_MS : pose === 'run' ? RUN_FRAME_MS : STAND_FRAME_MS;
+  const frameMs = POSE_FRAME_MS[pose] ?? 140;
   // The first rAF timestamp can predate module-eval performance.now() by a
   // hair; plain % keeps the sign and would index frames[-1] -> crash.
   const count = frames.length;
@@ -195,7 +297,6 @@ canvas.addEventListener('pointerdown', (event) => {
     dir = fleeDir;
     fleeStart = now;
     fleeUntil = now + FLEE_MS;
-    nextIdleAt = now + FLEE_MS + 2000 + Math.random() * 4000;
     selected = !selected;
     api.report(`poke! flee ${dir > 0 ? 'right' : 'left'}${selected ? ' (selected)' : ''}`);
   }
@@ -232,12 +333,15 @@ function loop(now: number): void {
   if (!paused) {
     if (now < fleeUntil) {
       x += fleeDir * FLEE_SPEED * dt;
-    } else if (now >= idleUntil) {
-      if (now >= nextIdleAt) {
-        idleUntil = now + IDLE_MS;
-        nextIdleAt = now + IDLE_MS + NEXT_IDLE_MIN_MS + Math.random() * NEXT_IDLE_SPAN_MS;
-      } else {
-        x += dir * SPEED * dt;
+    } else {
+      if (now >= activityUntil) {
+        pickActivity(now);
+      }
+      const act = ACTIVITIES[activity];
+      if (act.speed > 0) {
+        const step = SPEED * act.speed * dt;
+        maybeTurn(step);
+        x += dir * step;
       }
     }
     const maxX = Math.max(0, canvas.width - ART_W * CELL);

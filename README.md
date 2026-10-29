@@ -29,3 +29,8 @@ Transparent topmost overlay tracking the taskbar gap full-width; hover,
 click → poke-flee + select, click-anywhere unselect, pause/resume + exit +
 autostart toggle in tray; fullscreen hide; docks to the screen edge when the
 taskbar auto-hides; Explorer-restart-proof (top-level).
+
+The pet picks its own activities from a weighted table ported from
+vscode-petbar — amble, walk, run, hop, stand (with blink), sleep, eat, dance,
+wave, slip, moonwalk, backflip, shoot — each with its own speed, duration and
+frame rate. Poking it always interrupts with the hop-and-flee run.
